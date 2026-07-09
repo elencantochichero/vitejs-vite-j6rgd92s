@@ -1,2218 +1,644 @@
-import { useState, useEffect, useMemo } from 'react';
-import {
-  LayoutDashboard,
-  Receipt,
-  ClipboardList,
-  Package,
-  Plus,
+import { useState, useMemo } from 'react';
+import { 
+  LayoutDashboard, 
+  Settings, 
+  Receipt, 
+  Package, 
+  LogOut, 
+  ShieldCheck, 
+  Plus, 
   Trash2,
-  AlertTriangle,
-  Settings,
-  BarChart3,
-  Wine,
-  LogOut,
-  ShieldCheck,
+  Beer,
+  ArrowLeft,
+  ShoppingCart,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  AlertCircle,
+  Gift,
+  Boxes
 } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import {
-  getFirestore,
-  collection,
-  addDoc,
-  doc,
-  deleteDoc,
-  setDoc,
-  onSnapshot,
-} from 'firebase/firestore';
 
-// CONFIGURACIÓN REAL DE FIREBASE (El Encanto Chichero)
-const firebaseConfig = {
-  apiKey: 'AIzaSyCUKgsGqEczaaTyrMp_3AyLFyndV4AVRxc',
-  authDomain: 'el-encanto-chichero.firebaseapp.com',
-  projectId: 'el-encanto-chichero',
-  storageBucket: 'el-encanto-chichero.firebasestorage.app',
-  messagingSenderId: '260505767576',
-  appId: '1:260505767576:web:eaf4635cde1d3cded58aed',
-  measurementId: 'G-Z0B4GZKZMH',
-};
+// ==========================================
+// 1. BASE DE DATOS INICIAL (SIMULADA)
+// ==========================================
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const INITIAL_CATALOG = [
+  { id: 'PRD-001', name: 'Cerveza San Juan', type: 'Caja', unitsPerPackage: 12, cost: 60, price: 10 },
+  { id: 'PRD-002', name: 'Gaseosa Guarana', type: 'Paquete', unitsPerPackage: 15, cost: 45, price: 5 },
+  { id: 'PRD-003', name: 'Agua San Mateo', type: 'Paquete', unitsPerPackage: 20, cost: 30, price: 3 },
+  { id: 'PRD-004', name: 'Cigarro Lucky', type: 'Paquete', unitsPerPackage: 20, cost: 20, price: 2 },
+];
+
+const INITIAL_INVENTORY = [
+  { id: 'PRD-001', stockUnits: 120 },
+  { id: 'PRD-002', stockUnits: 75 },
+  { id: 'PRD-003', stockUnits: 100 },
+  { id: 'PRD-004', stockUnits: 40 },
+];
+
+const INITIAL_EXPENSES = [
+  { id: 'G-1', date: new Date().toISOString(), category: 'Marketing', description: 'Publicidad Meta Ads', type: 'Marketing', amount: 150 },
+  { id: 'G-2', date: new Date().toISOString(), category: 'Artistas', description: 'Orquesta Tumbao', type: 'Por Evento', amount: 800 },
+];
+
+const INITIAL_SALES = [
+  { id: 'V-1', date: new Date().toISOString(), items: [{ productId: 'PRD-001', name: 'Cerveza San Juan', qty: 24, price: 10 }], total: 240, isCourtesy: false },
+  { id: 'V-2', date: new Date().toISOString(), items: [{ productId: 'PRD-002', name: 'Gaseosa Guarana', qty: 5, price: 5 }], total: 25, isCourtesy: true },
+];
+
+// ==========================================
+// 2. COMPONENTE PRINCIPAL (APP)
+// ==========================================
 
 export default function App() {
-  // ==========================================
-  // ESTADOS DE SEGURIDAD Y LOGIN
-  // ==========================================
-  const [user, setUser] = useState<{ role: 'admin' | 'staff' } | null>(null);
+  // --- ESTADOS DE SESIÓN ---
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [loginStep, setLoginStep] = useState(0);
+  const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [password, setPassword] = useState('');
-  const [loginRole, setLoginRole] = useState<'admin' | 'staff' | null>(null);
+  const [error, setError] = useState('');
+  
+  // --- ESTADOS DE NAVEGACIÓN ---
+  const [activeTab, setActiveTab] = useState('panel');
+
+  // --- ESTADOS DE DATOS ---
+  const [catalog, setCatalog] = useState(INITIAL_CATALOG);
+  const [inventory, setInventory] = useState(INITIAL_INVENTORY);
+  const [expenses, setExpenses] = useState(INITIAL_EXPENSES);
+  const [sales, setSales] = useState(INITIAL_SALES);
+
+  // --- ESTADOS DE FORMULARIOS ---
+  const [newProduct, setNewProduct] = useState({ name: '', type: 'Caja', unitsPerPackage: 12, cost: 0, price: 0 });
+  const [newExpense, setNewExpense] = useState({ category: 'Artistas', description: '', type: 'Por Evento', amount: 0 });
+  const [stockAdd, setStockAdd] = useState({ productId: '', packageQty: 0 });
+  
+  // --- ESTADO DE CAJA (PUNTO DE VENTA) ---
+  const [cart, setCart] = useState<Array<{productId: string, name: string, qty: number, price: number}>>([]);
 
   // ==========================================
-  // ESTADOS DEL SISTEMA
+  // 3. LÓGICA DE NEGOCIO Y CÁLCULOS
   // ==========================================
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [productos, setProductos] = useState<any[]>([]);
-  const [estructura, setEstructura] = useState<any>({});
-  const [cuadres, setCuadres] = useState<any[]>([]);
-  const [gastos, setGastos] = useState<any[]>([]);
 
-  // ==========================================
-  // CARGA DE DATOS DESDE FIRESTORE EN TIEMPO REAL
-  // ==========================================
-  useEffect(() => {
-    const unsubCuadres = onSnapshot(collection(db, 'cuadres'), (snapshot) => {
-      setCuadres(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+  // Cálculos del Dashboard
+  const dashboardStats = useMemo(() => {
+    const totalRevenue = sales.filter(s => !s.isCourtesy).reduce((sum, sale) => sum + sale.total, 0);
+    const totalCourtesy = sales.filter(s => s.isCourtesy).reduce((sum, sale) => sum + sale.total, 0);
+    const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const netProfit = totalRevenue - totalExpenses;
+
+    // Lógica para Stock Vendido Dinámico
+    const itemsSold: Record<string, { name: string, qty: number, isCourtesyQty: number, type: string, unitsPerPackage: number }> = {};
+    
+    sales.forEach(sale => {
+      sale.items.forEach(item => {
+        if (!itemsSold[item.productId]) {
+          const productInfo = catalog.find(p => p.id === item.productId);
+          itemsSold[item.productId] = { 
+            name: item.name, 
+            qty: 0, 
+            isCourtesyQty: 0,
+            type: productInfo?.type || 'Unidad',
+            unitsPerPackage: productInfo?.unitsPerPackage || 1
+          };
+        }
+        if (sale.isCourtesy) {
+          itemsSold[item.productId].isCourtesyQty += item.qty;
+        } else {
+          itemsSold[item.productId].qty += item.qty;
+        }
+      });
     });
 
-    const unsubGastos = onSnapshot(collection(db, 'gastos'), (snapshot) => {
-      setGastos(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-    });
+    const totalUnitsSold = Object.values(itemsSold).reduce((sum, item) => sum + item.qty + item.isCourtesyQty, 0);
 
-    const unsubProductos = onSnapshot(
-      collection(db, 'productos'),
-      (snapshot) => {
-        if (!snapshot.empty)
-          setProductos(
-            snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-          );
-      }
-    );
+    return { totalRevenue, totalCourtesy, totalExpenses, netProfit, itemsSold: Object.values(itemsSold), totalUnitsSold };
+  }, [sales, expenses, catalog]);
 
-    const unsubEstructura = onSnapshot(
-      collection(db, 'estructura_gastos'),
-      (snapshot) => {
-        if (!snapshot.empty) setEstructura(snapshot.docs[0].data());
-      }
-    );
+  // Funciones de Login
+  const handleSelectRole = (role: string) => {
+    setSelectedRole(role);
+    setLoginStep(1);
+    setError('');
+    setPassword('');
+  };
 
-    return () => {
-      unsubCuadres();
-      unsubGastos();
-      unsubProductos();
-      unsubEstructura();
-    };
-  }, []);
-
-  // Lógica de Login
-  const handleLogin = () => {
-    if (loginRole === 'admin' && password === '1admin') {
-      setUser({ role: 'admin' });
-      setActiveTab('dashboard');
-    } else if (loginRole === 'staff' && password === 'personal') {
-      setUser({ role: 'staff' });
-      setActiveTab('dashboard');
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedRole === 'admin' && password === '1admin') {
+      setUserRole('admin');
+      setActiveTab('panel');
+    } else if (selectedRole === 'staff' && password === 'personal') {
+      setUserRole('staff');
+      setActiveTab('panel'); // Ahora Staff también entra al panel inicial
     } else {
-      alert('Contraseña incorrecta, inténtalo nuevamente.');
+      setError('Contraseña incorrecta');
     }
   };
 
-  // Utilidades
-  const formatSoles = (m: number) =>
-    `S/ ${parseFloat((m as any) || 0).toFixed(2)}`;
-  const fechasDisponibles = useMemo(() => {
-    const fechas = [
-      ...new Set([
-        ...cuadres.map((c) => c.fecha),
-        ...gastos.map((g) => g.fecha),
-      ]),
-    ]
-      .sort()
-      .reverse();
-    return fechas.length > 0
-      ? fechas
-      : [new Date().toISOString().split('T')[0]];
-  }, [cuadres, gastos]);
-
-  const [fechaFiltro, setFechaFiltro] = useState(
-    new Date().toISOString().split('T')[0]
-  );
-
-  useEffect(() => {
-    if (
-      fechasDisponibles.length > 0 &&
-      !fechasDisponibles.includes(fechaFiltro)
-    )
-      setFechaFiltro(fechasDisponibles[0]);
-  }, [fechasDisponibles]);
-
-  // Filtros del Dashboard
-  const [filtroProdIngreso, setFiltroProdIngreso] = useState('TODOS');
-  const [filtroProveedor, setFiltroProveedor] = useState('TODOS');
-  const [filtroGasto, setFiltroGasto] = useState('TODOS');
-
-  // ==========================================
-  // MOTOR FINANCIERO: CÁLCULOS AL MILÍMETRO
-  // ==========================================
-  const analisis = useMemo(() => {
-    const cuadresDia = cuadres.filter((c) => c.fecha === fechaFiltro);
-    const gastosDia = gastos.filter((g) => g.fecha === fechaFiltro);
-
-    let ingresosBarra = 0;
-    let costoReposicion = 0;
-    let costoCortesias = 0;
-    let ventasPorProducto: any = {};
-    let ingresosPorProductoID: any = {};
-    let deudaPorProveedor: any = {};
-
-    cuadresDia.forEach((c) => {
-      const p = productos.find((x) => x.id === c.productoId);
-      if (!p) return;
-
-      const totInicio =
-        Number(c.cajasInicio || 0) * p.factor + Number(c.unidInicio || 0);
-      const totAdd =
-        Number(c.cajasAdd || 0) * p.factor + Number(c.unidAdd || 0);
-      const totFin =
-        Number(c.cajasFin || 0) * p.factor + Number(c.unidFin || 0);
-
-      const udsConsumidas = totInicio + totAdd - totFin;
-      const vNeta = udsConsumidas - Number(c.cortesias || 0);
-
-      const ingresoProducto = vNeta * p.precio;
-      const costoUnidad = p.costo / p.factor;
-      const deudaProducto = (udsConsumidas / p.factor) * p.costo;
-
-      ingresosBarra += ingresoProducto;
-      costoReposicion += deudaProducto;
-      costoCortesias += Number(c.cortesias || 0) * costoUnidad;
-
-      ventasPorProducto[p.nombre] = (ventasPorProducto[p.nombre] || 0) + vNeta;
-      ingresosPorProductoID[p.id] =
-        (ingresosPorProductoID[p.id] || 0) + ingresoProducto;
-      deudaPorProveedor[p.proveedor] =
-        (deudaPorProveedor[p.proveedor] || 0) + deudaProducto;
-    });
-
-    const totalGastos = gastosDia.reduce(
-      (sum, g) => sum + Number(g.monto || 0),
-      0
-    );
-    const desgloseGastos = gastosDia.reduce((acc: any, g) => {
-      acc[g.categoria] = (acc[g.categoria] || 0) + Number(g.monto || 0);
-      return acc;
-    }, {});
-    const utilidadNeta = ingresosBarra - costoReposicion - totalGastos;
-
-    const estadoStock = productos.map((p) => {
-      const cuadresDeEsteProd = [...cuadres]
-        .filter((c) => c.productoId === p.id)
-        .sort(
-          (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
-        );
-      const stockCajas =
-        cuadresDeEsteProd.length > 0 ? cuadresDeEsteProd[0].cajasFin : 0;
-      return { ...p, stockCajas, alerta: stockCajas <= p.stockMin };
-    });
-
-    const topVentas = Object.entries(ventasPorProducto).sort(
-      (a: any, b: any) => b[1] - a[1]
-    );
-    const proveedoresUnicos = [...new Set(productos.map((p) => p.proveedor))];
-    const tiposGastosUnicos = [...new Set(gastosDia.map((g) => g.tipo))];
-    const categoriasGastosUnicas = [
-      ...new Set(gastosDia.map((g) => g.categoria)),
-    ];
-
-    return {
-      ingresosBarra,
-      costoReposicion,
-      costoCortesias,
-      totalGastos,
-      utilidadNeta,
-      desgloseGastos,
-      topVentas,
-      estadoStock,
-      ingresosPorProductoID,
-      deudaPorProveedor,
-      proveedoresUnicos,
-      tiposGastosUnicos,
-      categoriasGastosUnicas,
-      gastosDia,
+  // Funciones de Catálogo (Configuración)
+  const handleAddProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProduct.name || Number(newProduct.price) <= 0) return;
+    const newId = `PRD-00${catalog.length + 1}`;
+    const productToAdd = { 
+      ...newProduct, 
+      id: newId, 
+      unitsPerPackage: Number(newProduct.unitsPerPackage), 
+      cost: Number(newProduct.cost), 
+      price: Number(newProduct.price) 
     };
-  }, [cuadres, gastos, productos, fechaFiltro]);
+    setCatalog([...catalog, productToAdd]);
+    setInventory([...inventory, { id: newId, stockUnits: 0 }]); 
+    setNewProduct({ name: '', type: 'Caja', unitsPerPackage: 12, cost: 0, price: 0 }); // reset
+  };
 
-  const ingresoMostrado =
-    filtroProdIngreso === 'TODOS'
-      ? analisis.ingresosBarra
-      : analisis.ingresosPorProductoID[filtroProdIngreso] || 0;
-  const deudaMostrada =
-    filtroProveedor === 'TODOS'
-      ? analisis.costoReposicion
-      : analisis.deudaPorProveedor[filtroProveedor] || 0;
-  const gastosMostrados =
-    filtroGasto === 'TODOS'
-      ? analisis.totalGastos
-      : analisis.gastosDia
-          .filter(
-            (g) =>
-              `TIPO:${g.tipo}` === filtroGasto ||
-              `CAT:${g.categoria}` === filtroGasto
-          )
-          .reduce((sum, g) => sum + Number(g.monto || 0), 0);
+  const handleDeleteProduct = (id: string) => {
+    setCatalog(catalog.filter(prod => prod.id !== id));
+    setInventory(inventory.filter(inv => inv.id !== id));
+  };
 
-  // ==========================================
-  // ESTADOS DE FORMULARIOS
-  // ==========================================
-  const [gastoTipo, setGastoTipo] = useState('Gastos Directos');
-  const [gastoCat, setGastoCat] = useState('Artistas');
-  const [gastoDesc, setGastoDesc] = useState('');
-  const [gastoMonto, setGastoMonto] = useState('');
+  // Funciones de Gastos
+  const handleAddExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newExpense.description || Number(newExpense.amount) <= 0) return;
+    const newId = `G-${expenses.length + 1}`;
+    setExpenses([...expenses, { ...newExpense, id: newId, amount: Number(newExpense.amount), date: new Date().toISOString() }]);
+    setNewExpense({ category: 'Artistas', description: '', type: 'Por Evento', amount: 0 });
+  };
 
-  const [cDate, setCDate] = useState(new Date().toISOString().split('T')[0]);
-  const [cProd, setCProd] = useState('');
-  const [cInC, setCInC] = useState('');
-  const [cInU, setCInU] = useState('');
-  const [cAdC, setCAdC] = useState('');
-  const [cAdU, setCAdU] = useState('');
-  const [cFiC, setCFiC] = useState('');
-  const [cFiU, setCFiU] = useState('');
-  const [cCort, setCCort] = useState('');
+  // Funciones de Inventario
+  const handleAddStock = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stockAdd.productId || Number(stockAdd.packageQty) <= 0) return;
+    const product = catalog.find(p => p.id === stockAdd.productId);
+    if (!product) return;
+    const unitsToAdd = Number(stockAdd.packageQty) * product.unitsPerPackage;
+    setInventory(inventory.map(inv => 
+      inv.id === stockAdd.productId ? { ...inv, stockUnits: inv.stockUnits + unitsToAdd } : inv
+    ));
+    setStockAdd({ productId: '', packageQty: 0 });
+  };
 
-  // ==========================================
-  // FUNCIONES DE GUARDADO (FIREBASE)
-  // ==========================================
-  const registrarGasto = async () => {
-    if (!gastoMonto || parseFloat(gastoMonto) <= 0)
-      return alert('Monto inválido');
-    try {
-      await addDoc(collection(db, 'gastos'), {
-        fecha: cDate,
-        tipo: gastoTipo,
-        categoria: gastoCat,
-        descripcion: gastoDesc || 'Sin descripción',
-        monto: parseFloat(gastoMonto),
-      });
-      setGastoDesc('');
-      setGastoMonto('');
-      alert('Gasto registrado en la nube.');
-    } catch (e: any) {
-      alert('Error: ' + e.message);
+  // Funciones de Caja (Punto de Venta)
+  const addToCart = (product: any) => {
+    const existing = cart.find(item => item.productId === product.id);
+    if (existing) {
+      setCart(cart.map(item => item.productId === product.id ? { ...item, qty: item.qty + 1 } : item));
+    } else {
+      setCart([...cart, { productId: product.id, name: product.name, qty: 1, price: product.price }]);
     }
   };
 
-  const registrarCuadre = async () => {
-    if (!cProd) return alert('Selecciona producto');
-    try {
-      await addDoc(collection(db, 'cuadres'), {
-        fecha: cDate,
-        productoId: cProd,
-        cajasInicio: parseInt(cInC || '0'),
-        unidInicio: parseInt(cInU || '0'),
-        cajasAdd: parseInt(cAdC || '0'),
-        unidAdd: parseInt(cAdU || '0'),
-        cajasFin: parseInt(cFiC || '0'),
-        unidFin: parseInt(cFiU || '0'),
-        cortesias: parseInt(cCort || '0'),
-      });
-      setCProd('');
-      setCInC('');
-      setCInU('');
-      setCAdC('');
-      setCAdU('');
-      setCFiC('');
-      setCFiU('');
-      setCCort('');
-      alert('Cuadre guardado en la base de datos.');
-    } catch (e: any) {
-      alert('Error: ' + e.message);
+  const removeFromCart = (productId: string) => {
+    setCart(cart.filter(item => item.productId !== productId));
+  };
+
+  const cartTotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
+
+  const checkout = (isCourtesy: boolean = false) => {
+    if (cart.length === 0) return;
+    
+    // Validar Stock antes de vender
+    for (let item of cart) {
+      const inv = inventory.find(i => i.id === item.productId);
+      if (!inv || inv.stockUnits < item.qty) {
+        alert(`No hay stock suficiente de ${item.name}`);
+        return;
+      }
     }
-  };
 
-  const eliminarReg = async (col: string, id: string) => {
-    if (confirm('¿Eliminar permanentemente?'))
-      await deleteDoc(doc(db, col, id));
+    const newSale = { id: `V-${sales.length + 1}`, date: new Date().toISOString(), items: cart, total: cartTotal, isCourtesy };
+    setSales([...sales, newSale]);
+
+    let newInventory = [...inventory];
+    cart.forEach(cartItem => {
+      newInventory = newInventory.map(inv => inv.id === cartItem.productId ? { ...inv, stockUnits: inv.stockUnits - cartItem.qty } : inv);
+    });
+    setInventory(newInventory);
+    setCart([]);
   };
 
   // ==========================================
-  // RENDER 1: PANTALLA DE LOGIN
+  // 4. PANTALLAS (VISTAS)
   // ==========================================
-  if (!user) {
+
+  if (!userRole) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: '#080310',
-          padding: '20px',
-          fontFamily: 'sans-serif',
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: '#120721',
-            padding: '40px',
-            borderRadius: '24px',
-            width: '100%',
-            maxWidth: '400px',
-            border: '1px solid rgba(255,0,255,0.3)',
-            boxShadow: '0 0 40px rgba(255,0,255,0.1)',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              marginBottom: '24px',
-              color: '#ff00ff',
-            }}
-          >
-            <ShieldCheck size={72} />
-          </div>
-          <h2
-            style={{
-              color: '#fff',
-              textAlign: 'center',
-              marginBottom: '30px',
-              fontWeight: '900',
-              fontStyle: 'italic',
-              letterSpacing: '1px',
-            }}
-          >
-            EL ENCANTO CHICHERO
-          </h2>
+      <div className="min-h-screen flex items-center justify-center bg-[#0B0410] p-4 font-sans">
+        <div className="bg-[#13071E] p-10 rounded-3xl w-full max-w-md shadow-[0_0_50px_rgba(217,70,239,0.15)] border border-fuchsia-900/30">
+          <div className="flex justify-center mb-6"><ShieldCheck size={64} className="text-fuchsia-500" /></div>
+          <h2 className="text-white text-center text-4xl font-black italic mb-2 tracking-widest">EL ENCANTO</h2>
+          <p className="text-cyan-400 text-center text-lg font-bold tracking-widest mb-10">SISTEMA MAESTRO</p>
 
-          {!loginRole ? (
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}
-            >
-              <button
-                onClick={() => setLoginRole('admin')}
-                style={{
-                  width: '100%',
-                  padding: '15px',
-                  backgroundColor: '#ff00ff',
-                  color: '#000',
-                  borderRadius: '12px',
-                  fontWeight: '900',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textTransform: 'uppercase',
-                }}
-              >
-                Administrador
+          {loginStep === 0 ? (
+            <div className="space-y-4">
+              <button onClick={() => handleSelectRole('admin')} className="w-full bg-fuchsia-600 text-white p-4 rounded-xl font-black text-lg hover:bg-fuchsia-500 transition-colors tracking-wide shadow-lg shadow-fuchsia-900/50">
+                ADMINISTRADOR
               </button>
-              <button
-                onClick={() => setLoginRole('staff')}
-                style={{
-                  width: '100%',
-                  padding: '15px',
-                  backgroundColor: '#00ffff',
-                  color: '#000',
-                  borderRadius: '12px',
-                  fontWeight: '900',
-                  border: 'none',
-                  cursor: 'pointer',
-                  textTransform: 'uppercase',
-                }}
-              >
-                Staff / Barra
+              <button onClick={() => handleSelectRole('staff')} className="w-full bg-cyan-500 text-black p-4 rounded-xl font-black text-lg hover:bg-cyan-400 transition-colors tracking-wide shadow-lg shadow-cyan-900/50">
+                STAFF / BARRA
               </button>
             </div>
           ) : (
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}
-            >
-              <p
-                style={{
-                  color: loginRole === 'admin' ? '#ff00ff' : '#00ffff',
-                  textAlign: 'center',
-                  fontWeight: 'bold',
-                  margin: 0,
-                  textTransform: 'uppercase',
-                }}
-              >
-                Acceso {loginRole}
-              </p>
-              <input
-                type="password"
-                placeholder="Ingresa tu contraseña"
-                style={{
-                  width: '100%',
-                  padding: '15px',
-                  backgroundColor: '#000',
-                  color: '#fff',
-                  borderRadius: '12px',
-                  border: '1px solid #333',
-                  textAlign: 'center',
-                  outline: 'none',
-                }}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-              />
-              <button
-                onClick={handleLogin}
-                style={{
-                  width: '100%',
-                  padding: '15px',
-                  backgroundColor: '#10b981',
-                  color: '#000',
-                  borderRadius: '12px',
-                  fontWeight: '900',
-                  border: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                INGRESAR
-              </button>
-              <button
-                onClick={() => {
-                  setLoginRole(null);
-                  setPassword('');
-                }}
-                style={{
-                  width: '100%',
-                  background: 'none',
-                  border: 'none',
-                  color: '#6b7280',
-                  cursor: 'pointer',
-                  marginTop: '10px',
-                }}
-              >
-                Volver atrás
-              </button>
-            </div>
+            <form onSubmit={handleLoginSubmit} className="space-y-4 animate-in fade-in zoom-in duration-300">
+              <div className="flex items-center gap-3 mb-6 cursor-pointer text-slate-400 hover:text-white transition-colors" onClick={() => setLoginStep(0)}>
+                <ArrowLeft size={20} /> <span className="text-sm font-semibold uppercase tracking-wider">Volver</span>
+              </div>
+              <h3 className="text-white text-center font-bold mb-4 uppercase text-sm tracking-widest text-fuchsia-400">Ingresando como {selectedRole}</h3>
+              <input className="w-full bg-slate-900 text-white p-4 rounded-xl outline-none focus:ring-2 focus:ring-fuchsia-500 border border-slate-800 text-center tracking-widest text-xl font-bold" type="password" placeholder="CONTRASEÑA" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+              <button className="w-full bg-emerald-500 text-black p-4 rounded-xl font-black text-lg hover:bg-emerald-400 transition-colors tracking-wide mt-4 shadow-lg shadow-emerald-900/50">INGRESAR</button>
+              {error && <p className="text-red-400 text-center mt-4 text-sm font-bold bg-red-500/10 p-2 rounded-lg">{error}</p>}
+            </form>
           )}
         </div>
       </div>
     );
   }
 
-  // ==========================================
-  // RENDER 2: SISTEMA PRINCIPAL PROTEGIDO
-  // ==========================================
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#080310',
-        color: '#f3f4f6',
-        display: 'flex',
-        flexDirection: window.innerWidth < 768 ? 'column' : 'row',
-        fontFamily: 'sans-serif',
-      }}
-    >
-      {/* SIDEBAR CON RESTRICCIONES DE ROL */}
-      <aside
-        style={{
-          width: window.innerWidth < 768 ? '100%' : '280px',
-          backgroundColor: '#120721',
-          borderRight: '1px solid rgba(255,0,255,0.2)',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <h1
-            style={{
-              fontSize: '22px',
-              fontWeight: '900',
-              fontStyle: 'italic',
-              color: '#fff',
-              textTransform: 'uppercase',
-              marginBottom: '5px',
-            }}
-          >
-            El Encanto
-          </h1>
-          <span
-            style={{
-              fontSize: '10px',
-              color: user.role === 'admin' ? '#ff00ff' : '#00ffff',
-              letterSpacing: '2px',
-              padding: '4px 10px',
-              backgroundColor:
-                user.role === 'admin'
-                  ? 'rgba(255,0,255,0.1)'
-                  : 'rgba(0,255,255,0.1)',
-              borderRadius: '20px',
-              border:
-                user.role === 'admin'
-                  ? '1px solid rgba(255,0,255,0.2)'
-                  : '1px solid rgba(0,255,255,0.2)',
-            }}
-          >
-            ROL: {user.role.toUpperCase()}
-          </span>
-        </div>
-
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '14px 20px',
-              borderRadius: '12px',
-              border: 'none',
-              fontWeight: 'bold',
-              fontSize: '12px',
-              textTransform: 'uppercase',
-              letterSpacing: '1px',
-              cursor: 'pointer',
-              backgroundColor:
-                activeTab === 'dashboard' ? '#ff00ff' : 'transparent',
-              color: activeTab === 'dashboard' ? '#000' : '#9ca3af',
-            }}
-          >
-            <LayoutDashboard size={18} /> Dashboard
-          </button>
-          <button
-            onClick={() => setActiveTab('cuadre')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '14px 20px',
-              borderRadius: '12px',
-              border: 'none',
-              fontWeight: 'bold',
-              fontSize: '12px',
-              textTransform: 'uppercase',
-              letterSpacing: '1px',
-              cursor: 'pointer',
-              backgroundColor:
-                activeTab === 'cuadre' ? '#ff00ff' : 'transparent',
-              color: activeTab === 'cuadre' ? '#000' : '#9ca3af',
-            }}
-          >
-            <ClipboardList size={18} /> Control Barra
-          </button>
-
-          {/* BOTONES EXCLUSIVOS DEL ADMINISTRADOR */}
-          {user.role === 'admin' && (
-            <>
-              <button
-                onClick={() => setActiveTab('gastos')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  padding: '14px 20px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  fontWeight: 'bold',
-                  fontSize: '12px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  cursor: 'pointer',
-                  backgroundColor:
-                    activeTab === 'gastos' ? '#ff00ff' : 'transparent',
-                  color: activeTab === 'gastos' ? '#000' : '#9ca3af',
-                }}
-              >
-                <Receipt size={18} /> Gastos & Staff
-              </button>
-              <button
-                onClick={() => setActiveTab('productos')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  padding: '14px 20px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  fontWeight: 'bold',
-                  fontSize: '12px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  cursor: 'pointer',
-                  backgroundColor:
-                    activeTab === 'productos' ? '#ff00ff' : 'transparent',
-                  color: activeTab === 'productos' ? '#000' : '#9ca3af',
-                }}
-              >
-                <Package size={18} /> Productos
-              </button>
-              <button
-                onClick={() => setActiveTab('config')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  padding: '14px 20px',
-                  borderRadius: '12px',
-                  border: 'none',
-                  fontWeight: 'bold',
-                  fontSize: '12px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  cursor: 'pointer',
-                  backgroundColor:
-                    activeTab === 'config' ? '#ff00ff' : 'transparent',
-                  color: activeTab === 'config' ? '#000' : '#9ca3af',
-                }}
-              >
-                <Settings size={18} /> Configurar
-              </button>
-            </>
-          )}
-        </nav>
-
-        <button
-          onClick={() => {
-            setUser(null);
-            setPassword('');
-            setLoginRole(null);
-          }}
-          style={{
-            marginTop: 'auto',
-            background: 'none',
-            border: 'none',
-            color: '#ef4444',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            cursor: 'pointer',
-            fontWeight: 'bold',
-            padding: '10px',
-          }}
-        >
-          <LogOut size={18} /> Cerrar Sesión
-        </button>
-      </aside>
-
-      {/* CONTENIDO PRINCIPAL */}
-      <main style={{ flex: 1, padding: '30px', overflowY: 'auto' }}>
-        {/* DASHBOARD */}
-        {activeTab === 'dashboard' && (
-          <div
-            style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                backgroundColor: '#150a25',
-                padding: '24px',
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.05)',
-              }}
-            >
-              <div>
-                <h2
-                  style={{
-                    fontSize: '28px',
-                    fontWeight: '900',
-                    fontStyle: 'italic',
-                    margin: 0,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Cierre <span style={{ color: '#00ffff' }}>Financiero</span>
-                </h2>
+  // --- VISTA: DASHBOARD (PANEL) ---
+  const renderPanel = () => (
+    <div className="animate-in fade-in duration-500 space-y-6">
+      <div className="flex justify-between items-center mb-8">
+        <h2 className="text-3xl font-black italic text-fuchsia-500 tracking-widest uppercase">Dashboard General</h2>
+        <span className="bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20 px-4 py-2 rounded-lg font-bold text-sm tracking-wider">
+          HOY: {new Date().toLocaleDateString()}
+        </span>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        
+        {/* TARJETAS FINANCIERAS (SOLO ADMIN) */}
+        {userRole === 'admin' && (
+          <>
+            <div className="bg-[#13071E] p-6 rounded-3xl border border-emerald-500/30 shadow-lg shadow-emerald-900/20">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="p-3 bg-emerald-500/20 rounded-xl text-emerald-400"><DollarSign size={24}/></div>
+                <h4 className="text-slate-400 font-bold uppercase tracking-wider text-sm">Ingresos Barra</h4>
               </div>
-              <div>
-                <span
-                  style={{
-                    color: '#ff00ff',
-                    fontWeight: 'bold',
-                    fontSize: '12px',
-                    marginRight: '10px',
-                  }}
-                >
-                  FECHA:
-                </span>
-                <select
-                  style={{
-                    backgroundColor: '#000',
-                    border: '2px solid rgba(255,0,255,0.3)',
-                    color: '#fff',
-                    padding: '10px',
-                    borderRadius: '10px',
-                    outline: 'none',
-                  }}
-                  value={fechaFiltro}
-                  onChange={(e) => {
-                    setFechaFiltro(e.target.value);
-                    setFiltroProdIngreso('TODOS');
-                    setFiltroProveedor('TODOS');
-                    setFiltroGasto('TODOS');
-                  }}
-                >
-                  {fechasDisponibles.map((f: any) => (
-                    <option key={f} value={f}>
-                      {f}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <p className="text-4xl font-black text-emerald-400">S/ {dashboardStats.totalRevenue.toFixed(2)}</p>
             </div>
 
-            {/* Tarjetas KPI */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: '20px',
-              }}
-            >
-              {/* TARJETA INGRESOS - VISIBLE PARA ADMIN Y STAFF */}
-              <div
-                style={{
-                  background: 'linear-gradient(135deg, #0a1a2f, #040a14)',
-                  padding: '24px',
-                  borderRadius: '24px',
-                  border: '1px solid rgba(0,255,255,0.3)',
-                }}
-              >
-                <p
-                  style={{
-                    color: '#00ffff',
-                    fontSize: '10px',
-                    fontWeight: '900',
-                    letterSpacing: '1px',
-                    textTransform: 'uppercase',
-                    marginBottom: '10px',
-                  }}
-                >
-                  Ingresos de Barra
-                </p>
-                <select
-                  style={{
-                    width: '100%',
-                    backgroundColor: 'rgba(0,0,0,0.5)',
-                    border: '1px solid rgba(0,255,255,0.2)',
-                    color: '#fff',
-                    padding: '8px',
-                    borderRadius: '8px',
-                    fontSize: '10px',
-                    marginBottom: '15px',
-                  }}
-                  value={filtroProdIngreso}
-                  onChange={(e) => setFiltroProdIngreso(e.target.value)}
-                >
-                  <option value="TODOS">Todos</option>
-                  {productos.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.nombre}
-                    </option>
-                  ))}
-                </select>
-                <p style={{ fontSize: '32px', fontWeight: '900', margin: 0 }}>
-                  {formatSoles(ingresoMostrado)}
-                </p>
+            <div className="bg-[#13071E] p-6 rounded-3xl border border-red-500/30 shadow-lg shadow-red-900/20">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="p-3 bg-red-500/20 rounded-xl text-red-400"><TrendingDown size={24}/></div>
+                <h4 className="text-slate-400 font-bold uppercase tracking-wider text-sm">Gastos Totales</h4>
               </div>
-
-              {/* TARJETAS RESTANTES - SOLO VISIBLES PARA ADMIN */}
-              {user.role === 'admin' && (
-                <>
-                  <div
-                    style={{
-                      background: 'linear-gradient(135deg, #2f0a0a, #140404)',
-                      padding: '24px',
-                      borderRadius: '24px',
-                      border: '1px solid rgba(239,68,68,0.3)',
-                    }}
-                  >
-                    <p
-                      style={{
-                        color: '#f87171',
-                        fontSize: '10px',
-                        fontWeight: '900',
-                        letterSpacing: '1px',
-                        textTransform: 'uppercase',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      Costo Reposición
-                    </p>
-                    <select
-                      style={{
-                        width: '100%',
-                        backgroundColor: 'rgba(0,0,0,0.5)',
-                        border: '1px solid rgba(239,68,68,0.2)',
-                        color: '#fff',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        fontSize: '10px',
-                        marginBottom: '15px',
-                      }}
-                      value={filtroProveedor}
-                      onChange={(e) => setFiltroProveedor(e.target.value)}
-                    >
-                      <option value="TODOS">Todos</option>
-                      {analisis.proveedoresUnicos.map((prov: any) => (
-                        <option key={prov} value={prov}>
-                          {prov}
-                        </option>
-                      ))}
-                    </select>
-                    <p
-                      style={{ fontSize: '32px', fontWeight: '900', margin: 0 }}
-                    >
-                      {formatSoles(deudaMostrada)}
-                    </p>
-                  </div>
-                  <div
-                    style={{
-                      background: 'linear-gradient(135deg, #2f1a0a, #140a04)',
-                      padding: '24px',
-                      borderRadius: '24px',
-                      border: '1px solid rgba(249,115,22,0.3)',
-                    }}
-                  >
-                    <p
-                      style={{
-                        color: '#fb923c',
-                        fontSize: '10px',
-                        fontWeight: '900',
-                        letterSpacing: '1px',
-                        textTransform: 'uppercase',
-                        marginBottom: '10px',
-                      }}
-                    >
-                      Gastos Evento & Staff
-                    </p>
-                    <select
-                      style={{
-                        width: '100%',
-                        backgroundColor: 'rgba(0,0,0,0.5)',
-                        border: '1px solid rgba(249,115,22,0.2)',
-                        color: '#fff',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        fontSize: '10px',
-                        marginBottom: '15px',
-                      }}
-                      value={filtroGasto}
-                      onChange={(e) => setFiltroGasto(e.target.value)}
-                    >
-                      <option value="TODOS">Todos</option>
-                      <optgroup label="Clasificación">
-                        {analisis.tiposGastosUnicos.map((t: any) => (
-                          <option key={`TIPO:${t}`} value={`TIPO:${t}`}>
-                            {t}
-                          </option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Categoría">
-                        {analisis.categoriasGastosUnicas.map((c: any) => (
-                          <option key={`CAT:${c}`} value={`CAT:${c}`}>
-                            {c}
-                          </option>
-                        ))}
-                      </optgroup>
-                    </select>
-                    <p
-                      style={{ fontSize: '32px', fontWeight: '900', margin: 0 }}
-                    >
-                      {formatSoles(gastosMostrados)}
-                    </p>
-                  </div>
-                  <div
-                    style={{
-                      background:
-                        analisis.utilidadNeta >= 0
-                          ? 'linear-gradient(135deg, #0a2f15, #041408)'
-                          : 'linear-gradient(135deg, #2f0a0a, #140404)',
-                      padding: '24px',
-                      borderRadius: '24px',
-                      border:
-                        analisis.utilidadNeta >= 0
-                          ? '1px solid rgba(16,185,129,0.5)'
-                          : '1px solid rgba(239,68,68,0.5)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                    }}
-                  >
-                    <p
-                      style={{
-                        color:
-                          analisis.utilidadNeta >= 0 ? '#34d399' : '#f87171',
-                        fontSize: '10px',
-                        fontWeight: '900',
-                        letterSpacing: '1px',
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      Utilidad Real Neta
-                    </p>
-                    <div style={{ marginTop: '20px' }}>
-                      <p
-                        style={{
-                          fontSize: '36px',
-                          fontWeight: '900',
-                          margin: 0,
-                        }}
-                      >
-                        {formatSoles(analisis.utilidadNeta)}
-                      </p>
-                      <p
-                        style={{
-                          fontSize: '10px',
-                          color: '#9ca3af',
-                          margin: '5px 0 0 0',
-                        }}
-                      >
-                        Cálculo total global
-                      </p>
-                    </div>
-                  </div>
-                </>
-              )}
+              <p className="text-4xl font-black text-red-400">S/ {dashboardStats.totalExpenses.toFixed(2)}</p>
             </div>
 
-            {/* Gráficos de Datos (Visibles para AMBOS) */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-                gap: '20px',
-              }}
-            >
-              <div
-                style={{
-                  backgroundColor: '#150a25',
-                  padding: '24px',
-                  borderRadius: '24px',
-                  border: '1px solid rgba(255,255,255,0.05)',
-                }}
-              >
-                <h3
-                  style={{
-                    fontSize: '14px',
-                    color: '#ff00ff',
-                    textTransform: 'uppercase',
-                    fontWeight: '900',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '15px',
-                  }}
-                >
-                  <AlertTriangle size={18} /> Status de Stock
-                </h3>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                  }}
-                >
-                  {analisis.estadoStock.map((p) => (
-                    <div
-                      key={p.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        padding: '12px',
-                        borderRadius: '12px',
-                        border: '1px solid rgba(255,255,255,0.05)',
-                        backgroundColor: p.alerta
-                          ? 'rgba(239,68,68,0.1)'
-                          : 'rgba(0,0,0,0.4)',
-                        borderColor: p.alerta
-                          ? 'rgba(239,68,68,0.3)'
-                          : 'rgba(255,255,255,0.05)',
-                      }}
-                    >
-                      <div>
-                        <span
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: 'bold',
-                            color: p.alerta ? '#f87171' : '#d1d5db',
-                          }}
-                        >
-                          {p.nombre}
-                        </span>
-                        {p.alerta && (
-                          <div
-                            style={{
-                              fontSize: '9px',
-                              color: '#ef4444',
-                              fontWeight: '900',
-                              textTransform: 'uppercase',
-                            }}
-                          >
-                            Reabastecer
-                          </div>
-                        )}
-                      </div>
-                      <span
-                        style={{
-                          fontWeight: '900',
-                          color: p.alerta ? '#f87171' : '#fff',
-                        }}
-                      >
-                        {p.stockCajas}{' '}
-                        <small
-                          style={{ fontWeight: 'normal', fontSize: '10px' }}
-                        >
-                          cj
-                        </small>
-                      </span>
-                    </div>
-                  ))}
-                </div>
+            <div className="bg-[#13071E] p-6 rounded-3xl border border-fuchsia-500/30 shadow-lg shadow-fuchsia-900/20 relative overflow-hidden">
+              <div className="absolute -right-4 -top-4 opacity-5"><TrendingUp size={100}/></div>
+              <div className="flex items-center gap-4 mb-4 relative z-10">
+                <div className="p-3 bg-fuchsia-500/20 rounded-xl text-fuchsia-400"><TrendingUp size={24}/></div>
+                <h4 className="text-slate-400 font-bold uppercase tracking-wider text-sm">Utilidad Neta</h4>
               </div>
-
-              <div
-                style={{
-                  backgroundColor: '#150a25',
-                  padding: '24px',
-                  borderRadius: '24px',
-                  border: '1px solid rgba(255,255,255,0.05)',
-                }}
-              >
-                <h3
-                  style={{
-                    fontSize: '14px',
-                    color: '#00ffff',
-                    textTransform: 'uppercase',
-                    fontWeight: '900',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '15px',
-                  }}
-                >
-                  <BarChart3 size={18} /> Top Productos
-                </h3>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                  }}
-                >
-                  {analisis.topVentas.length > 0 ? (
-                    analisis.topVentas.map(([nombre, cant]: any, i) => (
-                      <div
-                        key={nombre}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          padding: '12px',
-                          borderRadius: '12px',
-                          backgroundColor: 'rgba(0,0,0,0.4)',
-                          border: '1px solid rgba(255,255,255,0.05)',
-                        }}
-                      >
-                        <span style={{ fontSize: '12px', fontWeight: 'bold' }}>
-                          <span
-                            style={{ color: '#6b7280', marginRight: '5px' }}
-                          >
-                            #{i + 1}
-                          </span>{' '}
-                          {nombre}
-                        </span>
-                        <span style={{ color: '#00ffff', fontWeight: '900' }}>
-                          {cant}{' '}
-                          <small style={{ fontSize: '9px', color: '#6b7280' }}>
-                            u
-                          </small>
-                        </span>
-                      </div>
-                    ))
-                  ) : (
-                    <p
-                      style={{
-                        color: '#6b7280',
-                        fontSize: '12px',
-                        textAlign: 'center',
-                      }}
-                    >
-                      Sin ventas registradas.
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  backgroundColor: '#150a25',
-                  padding: '24px',
-                  borderRadius: '24px',
-                  border: '1px solid rgba(255,255,255,0.05)',
-                }}
-              >
-                <h3
-                  style={{
-                    fontSize: '14px',
-                    color: '#fb923c',
-                    textTransform: 'uppercase',
-                    fontWeight: '900',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '15px',
-                  }}
-                >
-                  <Wine size={18} /> Fugas y Cortesías
-                </h3>
-                <div
-                  style={{
-                    backgroundColor: 'rgba(249,115,22,0.1)',
-                    padding: '20px',
-                    borderRadius: '16px',
-                    border: '1px solid rgba(249,115,22,0.2)',
-                    marginBottom: '15px',
-                  }}
-                >
-                  <p
-                    style={{
-                      fontSize: '10px',
-                      color: 'rgba(249,115,22,0.8)',
-                      fontWeight: '900',
-                      textTransform: 'uppercase',
-                      margin: '0 0 5px 0',
-                    }}
-                  >
-                    Costo Pérdida en Cortesías
-                  </p>
-                  <p
-                    style={{
-                      fontSize: '28px',
-                      color: '#fb923c',
-                      fontWeight: '900',
-                      margin: 0,
-                    }}
-                  >
-                    {formatSoles(analisis.costoCortesias)}
-                  </p>
-                </div>
-              </div>
+              <p className={`text-4xl font-black relative z-10 ${dashboardStats.netProfit >= 0 ? 'text-white' : 'text-red-400'}`}>
+                S/ {dashboardStats.netProfit.toFixed(2)}
+              </p>
             </div>
-          </div>
+            
+            <div className="bg-[#13071E] p-6 rounded-3xl border border-orange-500/30 shadow-lg shadow-orange-900/20">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="p-3 bg-orange-500/20 rounded-xl text-orange-400"><Gift size={24}/></div>
+                <h4 className="text-slate-400 font-bold uppercase tracking-wider text-sm">Cortesías</h4>
+              </div>
+              <p className="text-4xl font-black text-orange-400">S/ {dashboardStats.totalCourtesy.toFixed(2)}</p>
+            </div>
+          </>
         )}
 
-        {/* TAB CONTROL DE BARRA (Visible para AMBOS) */}
-        {activeTab === 'cuadre' && (
-          <div
-            style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}
-          >
-            <h2
-              style={{
-                fontSize: '24px',
-                fontWeight: '900',
-                fontStyle: 'italic',
-                textTransform: 'uppercase',
-                margin: 0,
-              }}
-            >
-              Control de <span style={{ color: '#00ffff' }}>Barra</span>
-            </h2>
-            <div
-              style={{
-                backgroundColor: '#150a25',
-                padding: '24px',
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.05)',
-              }}
-            >
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                  gap: '20px',
-                }}
+        {/* NUEVA TARJETA: STOCK VENDIDO (PARA ADMIN Y STAFF) */}
+        <div className={`bg-[#13071E] p-6 rounded-3xl border border-cyan-500/30 shadow-lg shadow-cyan-900/20 ${userRole === 'staff' ? 'md:col-span-2 lg:col-span-4' : 'lg:col-span-4'}`}>
+          <div className="flex items-center gap-4 mb-6 border-b border-slate-800 pb-4">
+            <div className="p-3 bg-cyan-500/20 rounded-xl text-cyan-400"><Boxes size={28}/></div>
+            <div>
+              <h4 className="text-white font-black uppercase tracking-widest text-lg">Reporte de Stock Vendido</h4>
+              <p className="text-slate-400 text-sm">Total acumulado del día: {dashboardStats.totalUnitsSold} unidades despachadas</p>
+            </div>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-cyan-400 text-xs uppercase tracking-widest border-b border-slate-800">
+                  <th className="pb-3 font-black">Producto</th>
+                  <th className="pb-3 font-black text-right">Vendido (Unid)</th>
+                  <th className="pb-3 font-black text-right">Cortesías (Unid)</th>
+                  <th className="pb-3 font-black text-right">Total Despachado</th>
+                  <th className="pb-3 font-black text-right">Equivalente en Empaques</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dashboardStats.itemsSold.length === 0 ? (
+                  <tr><td colSpan={5} className="py-6 text-center text-slate-500 font-bold">Aún no hay ventas registradas hoy.</td></tr>
+                ) : (
+                  dashboardStats.itemsSold.map((item, idx) => {
+                    const totalUnid = item.qty + item.isCourtesyQty;
+                    const empaquesEnteros = Math.floor(totalUnid / item.unitsPerPackage);
+                    const unidadesSueltas = totalUnid % item.unitsPerPackage;
+                    const textoEquivalente = empaquesEnteros > 0 
+                      ? `${empaquesEnteros} ${item.type}(s) ${unidadesSueltas > 0 ? `y ${unidadesSueltas} Unid.` : ''}` 
+                      : `${totalUnid} Unid. sueltas`;
+
+                    return (
+                      <tr key={idx} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                        <td className="py-4 font-bold text-white text-sm">{item.name}</td>
+                        <td className="py-4 text-right text-emerald-400 font-black">{item.qty}</td>
+                        <td className="py-4 text-right text-orange-400 font-black">{item.isCourtesyQty}</td>
+                        <td className="py-4 text-right text-cyan-400 font-black text-lg">{totalUnid}</td>
+                        <td className="py-4 text-right text-slate-300 font-medium text-sm">{textoEquivalente}</td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+
+  // --- VISTA: CAJA/BARRA (PUNTO DE VENTA) ---
+  const renderBarra = () => (
+    <div className="animate-in fade-in duration-500 h-full flex flex-col lg:flex-row gap-6">
+      <div className="flex-1 bg-[#13071E] rounded-3xl border border-fuchsia-900/30 p-6 shadow-xl overflow-y-auto">
+        <h3 className="text-2xl font-black italic text-cyan-400 mb-6 tracking-widest uppercase">Caja / Pedidos</h3>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+          {catalog.map(prod => {
+            const inv = inventory.find(i => i.id === prod.id)?.stockUnits || 0;
+            return (
+              <button 
+                key={prod.id} 
+                onClick={() => addToCart(prod)}
+                disabled={inv <= 0}
+                className={`p-4 rounded-2xl border text-left transition-all ${inv > 0 ? 'bg-slate-900 border-slate-700 hover:border-cyan-400 hover:bg-slate-800' : 'bg-slate-950 border-red-900/30 opacity-50 cursor-not-allowed'}`}
               >
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      color: '#ff00ff',
-                      textTransform: 'uppercase',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Fecha y Producto
-                  </label>
-                  <div
-                    style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}
-                  >
-                    <input
-                      type="date"
-                      style={{
-                        flex: 1,
-                        minWidth: '150px',
-                        backgroundColor: '#000',
-                        padding: '12px',
-                        borderRadius: '10px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                        outline: 'none',
-                      }}
-                      value={cDate}
-                      onChange={(e) => setCDate(e.target.value)}
-                    />
-                    <select
-                      style={{
-                        flex: 2,
-                        minWidth: '200px',
-                        backgroundColor: '#000',
-                        padding: '12px',
-                        borderRadius: '10px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                        outline: 'none',
-                      }}
-                      value={cProd}
-                      onChange={(e) => setCProd(e.target.value)}
-                    >
-                      <option value="">Seleccionar Producto...</option>
-                      {productos.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.nombre} (x{p.factor})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="flex justify-between items-start mb-2">
+                  <Beer size={24} className={inv > 0 ? 'text-cyan-400' : 'text-red-500'} />
+                  <span className={`text-xs font-bold px-2 py-1 rounded-md ${inv > 10 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>Stock: {inv}</span>
                 </div>
+                <h4 className="font-bold text-white mb-1 line-clamp-2">{prod.name}</h4>
+                <p className="text-emerald-400 font-black text-lg">S/ {prod.price.toFixed(2)}</p>
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
-                <div
-                  style={{
-                    backgroundColor: 'rgba(0,255,255,0.05)',
-                    padding: '15px',
-                    borderRadius: '15px',
-                    border: '1px solid rgba(0,255,255,0.2)',
-                  }}
-                >
-                  <p
-                    style={{
-                      color: '#00ffff',
-                      fontSize: '10px',
-                      fontWeight: '900',
-                      textAlign: 'center',
-                      textTransform: 'uppercase',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    1. Apertura
-                  </p>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <input
-                      type="number"
-                      placeholder="Cj"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cInC}
-                      onChange={(e) => setCInC(e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      placeholder="Ud"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cInU}
-                      onChange={(e) => setCInU(e.target.value)}
-                    />
-                  </div>
+      <div className="w-full lg:w-96 bg-[#0B0410] rounded-3xl border border-slate-800 p-6 flex flex-col shadow-2xl">
+        <h3 className="text-xl font-black text-white mb-4 flex items-center gap-3 border-b border-slate-800 pb-4">
+          <ShoppingCart className="text-fuchsia-500"/> Ticket Actual
+        </h3>
+        
+        <div className="flex-1 overflow-y-auto space-y-3 mb-6 min-h-[300px]">
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-slate-600">
+              <Package size={48} className="mb-2 opacity-20" />
+              <p className="font-bold tracking-widest uppercase text-sm">Ticket Vacío</p>
+            </div>
+          ) : (
+            cart.map((item, idx) => (
+              <div key={idx} className="flex justify-between items-center bg-[#13071E] p-3 rounded-xl border border-slate-800">
+                <div className="flex-1">
+                  <p className="font-bold text-white text-sm">{item.name}</p>
+                  <p className="text-slate-400 text-xs">{item.qty} x S/ {item.price.toFixed(2)}</p>
                 </div>
-
-                <div
-                  style={{
-                    backgroundColor: 'rgba(249,115,22,0.05)',
-                    padding: '15px',
-                    borderRadius: '15px',
-                    border: '1px solid rgba(249,115,22,0.2)',
-                  }}
-                >
-                  <p
-                    style={{
-                      color: '#fb923c',
-                      fontSize: '10px',
-                      fontWeight: '900',
-                      textAlign: 'center',
-                      textTransform: 'uppercase',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    2. Extrañado
-                  </p>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <input
-                      type="number"
-                      placeholder="Cj"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cAdC}
-                      onChange={(e) => setCAdC(e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      placeholder="Ud"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cAdU}
-                      onChange={(e) => setCAdU(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    backgroundColor: 'rgba(16,185,129,0.05)',
-                    padding: '15px',
-                    borderRadius: '15px',
-                    border: '1px solid rgba(16,185,129,0.2)',
-                  }}
-                >
-                  <p
-                    style={{
-                      color: '#34d399',
-                      fontSize: '10px',
-                      fontWeight: '900',
-                      textAlign: 'center',
-                      textTransform: 'uppercase',
-                      marginBottom: '10px',
-                    }}
-                  >
-                    3. Cierre
-                  </p>
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <input
-                      type="number"
-                      placeholder="Cj"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cFiC}
-                      onChange={(e) => setCFiC(e.target.value)}
-                    />
-                    <input
-                      type="number"
-                      placeholder="Ud"
-                      style={{
-                        width: '50%',
-                        backgroundColor: '#000',
-                        textAlign: 'center',
-                        padding: '8px',
-                        borderRadius: '8px',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: '#fff',
-                      }}
-                      value={cFiU}
-                      onChange={(e) => setCFiU(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    gridColumn: '1 / -1',
-                    display: 'flex',
-                    gap: '10px',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: '150px' }}>
-                    <label
-                      style={{
-                        display: 'block',
-                        fontSize: '10px',
-                        fontWeight: 'bold',
-                        color: '#f87171',
-                        textTransform: 'uppercase',
-                        marginBottom: '8px',
-                      }}
-                    >
-                      Cortesías (Unds)
-                    </label>
-                    <input
-                      type="number"
-                      placeholder="Regaladas"
-                      style={{
-                        width: '100%',
-                        backgroundColor: 'rgba(239,68,68,0.1)',
-                        padding: '12px',
-                        borderRadius: '10px',
-                        border: '1px solid rgba(239,68,68,0.3)',
-                        color: '#fff',
-                        outline: 'none',
-                      }}
-                      value={cCort}
-                      onChange={(e) => setCCort(e.target.value)}
-                    />
-                  </div>
-                  <button
-                    onClick={registrarCuadre}
-                    style={{
-                      flex: 2,
-                      minWidth: '200px',
-                      backgroundColor: '#00ffff',
-                      color: '#000',
-                      fontWeight: '900',
-                      textTransform: 'uppercase',
-                      borderRadius: '10px',
-                      border: 'none',
-                      cursor: 'pointer',
-                      marginTop: '22px',
-                    }}
-                  >
-                    GUARDAR REGISTRO
+                <div className="flex items-center gap-3">
+                  <span className="font-black text-emerald-400">S/ {(item.qty * item.price).toFixed(2)}</span>
+                  <button onClick={() => removeFromCart(item.productId)} className="text-red-500 hover:text-red-400 bg-red-500/10 p-2 rounded-lg">
+                    <Trash2 size={16} />
                   </button>
                 </div>
               </div>
-            </div>
-
-            <div
-              style={{
-                overflowX: 'auto',
-                backgroundColor: '#150a25',
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.05)',
-              }}
-            >
-              <table
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  borderCollapse: 'collapse',
-                  fontSize: '12px',
-                }}
-              >
-                <thead
-                  style={{
-                    backgroundColor: 'rgba(0,0,0,0.6)',
-                    color: '#ff00ff',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  <tr>
-                    <th style={{ padding: '16px' }}>Fecha</th>
-                    <th style={{ padding: '16px' }}>Producto</th>
-                    <th style={{ padding: '16px', textAlign: 'center' }}>
-                      Ini
-                    </th>
-                    <th style={{ padding: '16px', textAlign: 'center' }}>
-                      Add
-                    </th>
-                    <th style={{ padding: '16px', textAlign: 'center' }}>
-                      Fin
-                    </th>
-                    <th
-                      style={{
-                        padding: '16px',
-                        textAlign: 'center',
-                        color: '#f87171',
-                      }}
-                    >
-                      Mermas
-                    </th>
-                    <th
-                      style={{
-                        padding: '16px',
-                        textAlign: 'center',
-                        color: '#34d399',
-                      }}
-                    >
-                      Venta Real
-                    </th>
-                    {user.role === 'admin' && (
-                      <th style={{ padding: '16px', textAlign: 'right' }}>
-                        Efectivo Caja
-                      </th>
-                    )}
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {cuadres
-                    .slice()
-                    .reverse()
-                    .map((c) => {
-                      const p = productos.find((x) => x.id === c.productoId);
-                      if (!p) return null;
-                      const totIni =
-                        Number(c.cajasInicio || 0) * p.factor +
-                        Number(c.unidInicio || 0);
-                      const totAdd =
-                        Number(c.cajasAdd || 0) * p.factor +
-                        Number(c.unidAdd || 0);
-                      const totFin =
-                        Number(c.cajasFin || 0) * p.factor +
-                        Number(c.unidFin || 0);
-                      const vReal =
-                        totIni + totAdd - totFin - Number(c.cortesias || 0);
-                      return (
-                        <tr
-                          key={c.id}
-                          style={{
-                            borderBottom: '1px solid rgba(255,255,255,0.05)',
-                          }}
-                        >
-                          <td style={{ padding: '16px', color: '#9ca3af' }}>
-                            {c.fecha}
-                          </td>
-                          <td style={{ padding: '16px', fontWeight: 'bold' }}>
-                            {p.nombre}
-                          </td>
-                          <td style={{ padding: '16px', textAlign: 'center' }}>
-                            {totIni}
-                          </td>
-                          <td style={{ padding: '16px', textAlign: 'center' }}>
-                            {totAdd}
-                          </td>
-                          <td style={{ padding: '16px', textAlign: 'center' }}>
-                            {totFin}
-                          </td>
-                          <td
-                            style={{
-                              padding: '16px',
-                              textAlign: 'center',
-                              color: '#f87171',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            {c.cortesias || 0}
-                          </td>
-                          <td
-                            style={{
-                              padding: '16px',
-                              textAlign: 'center',
-                              color: '#34d399',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            {vReal}
-                          </td>
-                          {user.role === 'admin' && (
-                            <td
-                              style={{
-                                padding: '16px',
-                                textAlign: 'right',
-                                color: '#00ffff',
-                                fontWeight: '900',
-                              }}
-                            >
-                              {formatSoles(vReal * p.precio)}
-                            </td>
-                          )}
-                          <td style={{ padding: '16px', textAlign: 'center' }}>
-                            <button
-                              onClick={() => eliminarReg('cuadres', c.id)}
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                color: '#ef4444',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* TAB GASTOS (SOLO ADMIN) */}
-        {user.role === 'admin' && activeTab === 'gastos' && (
-          <div
-            style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}
-          >
-            <h2
-              style={{
-                fontSize: '24px',
-                fontWeight: '900',
-                fontStyle: 'italic',
-                textTransform: 'uppercase',
-                margin: 0,
-              }}
-            >
-              Gastos y <span style={{ color: '#ff00ff' }}>Staff</span>
-            </h2>
-            <div
-              style={{
-                backgroundColor: '#150a25',
-                padding: '24px',
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.05)',
-              }}
-            >
-              <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: '150px' }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      color: '#9ca3af',
-                      textTransform: 'uppercase',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Clasificación
-                  </label>
-                  <select
-                    style={{
-                      width: '100%',
-                      backgroundColor: '#000',
-                      padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff',
-                      outline: 'none',
-                    }}
-                    value={gastoTipo}
-                    onChange={(e) => {
-                      setGastoTipo(e.target.value);
-                      setGastoCat(estructura[e.target.value]?.[0] || '');
-                    }}
-                  >
-                    {Object.keys(estructura).map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ flex: 1, minWidth: '150px' }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      color: '#9ca3af',
-                      textTransform: 'uppercase',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Categoría
-                  </label>
-                  <select
-                    style={{
-                      width: '100%',
-                      backgroundColor: '#000',
-                      padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff',
-                      outline: 'none',
-                    }}
-                    value={gastoCat}
-                    onChange={(e) => setGastoCat(e.target.value)}
-                  >
-                    {(estructura[gastoTipo] || []).map((c: any) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div style={{ flex: 2, minWidth: '200px' }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      color: '#9ca3af',
-                      textTransform: 'uppercase',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Detalle de Pago
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Pago orquesta"
-                    style={{
-                      width: '100%',
-                      backgroundColor: '#000',
-                      padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      color: '#fff',
-                      outline: 'none',
-                    }}
-                    value={gastoDesc}
-                    onChange={(e) => setGastoDesc(e.target.value)}
-                  />
-                </div>
-                <div style={{ flex: 1, minWidth: '100px' }}>
-                  <label
-                    style={{
-                      display: 'block',
-                      fontSize: '10px',
-                      fontWeight: 'bold',
-                      color: '#00ffff',
-                      textTransform: 'uppercase',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Monto (S/)
-                  </label>
-                  <input
-                    type="number"
-                    placeholder="0.00"
-                    style={{
-                      width: '100%',
-                      backgroundColor: '#000',
-                      padding: '12px',
-                      borderRadius: '10px',
-                      border: '1px solid rgba(0,255,255,0.3)',
-                      color: '#fff',
-                      outline: 'none',
-                    }}
-                    value={gastoMonto}
-                    onChange={(e) => setGastoMonto(e.target.value)}
-                  />
-                </div>
-                <button
-                  onClick={registrarGasto}
-                  style={{
-                    flex: 'none',
-                    backgroundColor: '#ff00ff',
-                    color: '#000',
-                    borderRadius: '10px',
-                    border: 'none',
-                    padding: '0 24px',
-                    cursor: 'pointer',
-                    marginTop: '22px',
-                  }}
-                >
-                  <Plus size={24} />
-                </button>
-              </div>
-            </div>
-
-            <div
-              style={{
-                overflowX: 'auto',
-                backgroundColor: '#150a25',
-                borderRadius: '24px',
-                border: '1px solid rgba(255,255,255,0.05)',
-              }}
-            >
-              <table
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  borderCollapse: 'collapse',
-                  fontSize: '12px',
-                }}
-              >
-                <thead
-                  style={{
-                    backgroundColor: 'rgba(0,0,0,0.6)',
-                    color: '#fb923c',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  <tr>
-                    <th style={{ padding: '16px' }}>Fecha</th>
-                    <th style={{ padding: '16px' }}>Categoría</th>
-                    <th style={{ padding: '16px' }}>Descripción</th>
-                    <th
-                      style={{
-                        padding: '16px',
-                        textAlign: 'right',
-                        color: '#f87171',
-                      }}
-                    >
-                      Egreso (S/)
-                    </th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {gastos
-                    .slice()
-                    .reverse()
-                    .map((g) => (
-                      <tr
-                        key={g.id}
-                        style={{
-                          borderBottom: '1px solid rgba(255,255,255,0.05)',
-                        }}
-                      >
-                        <td style={{ padding: '16px', color: '#9ca3af' }}>
-                          {g.fecha}
-                        </td>
-                        <td style={{ padding: '16px', fontWeight: 'bold' }}>
-                          {g.categoria}
-                        </td>
-                        <td style={{ padding: '16px' }}>{g.descripcion}</td>
-                        <td
-                          style={{
-                            padding: '16px',
-                            textAlign: 'right',
-                            color: '#f87171',
-                            fontWeight: '900',
-                          }}
-                        >
-                          -{formatSoles(g.monto)}
-                        </td>
-                        <td style={{ padding: '16px', textAlign: 'center' }}>
-                          <button
-                            onClick={() => eliminarReg('gastos', g.id)}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: '#ef4444',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* TAB PRODUCTOS Y CONFIG (SOLO ADMIN) */}
-        {user.role === 'admin' &&
-          (activeTab === 'productos' || activeTab === 'config') && (
-            <div
-              style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}
-            >
-              <h2
-                style={{
-                  fontSize: '24px',
-                  fontWeight: '900',
-                  fontStyle: 'italic',
-                  textTransform: 'uppercase',
-                  margin: 0,
-                }}
-              >
-                Gestión de{' '}
-                <span
-                  style={{
-                    color: activeTab === 'productos' ? '#00ffff' : '#ff00ff',
-                  }}
-                >
-                  Catálogo y Ajustes
-                </span>
-              </h2>
-
-              {activeTab === 'productos' && (
-                <div
-                  style={{
-                    backgroundColor: '#150a25',
-                    padding: '24px',
-                    borderRadius: '24px',
-                    border: '1px solid rgba(255,255,255,0.05)',
-                  }}
-                >
-                  <form
-                    style={{
-                      display: 'flex',
-                      gap: '15px',
-                      flexWrap: 'wrap',
-                      alignItems: 'flex-end',
-                    }}
-                    onSubmit={async (e: any) => {
-                      e.preventDefault();
-                      const data = new FormData(e.target);
-                      const nuevoId = `PRD-${Date.now().toString().slice(-4)}`;
-                      await setDoc(doc(db, 'productos', nuevoId), {
-                        id: nuevoId,
-                        nombre: data.get('nombre'),
-                        proveedor: data.get('proveedor') || 'General',
-                        factor: Number(data.get('factor')),
-                        costo: Number(data.get('costo')),
-                        precio: Number(data.get('precio')),
-                        stockMin: Number(data.get('stockMin')),
-                      });
-                      e.target.reset();
-                      alert('Producto agregado.');
-                    }}
-                  >
-                    <div style={{ flex: 2, minWidth: '150px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#9ca3af',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Nombre
-                      </label>
-                      <input
-                        name="nombre"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: '#000',
-                          border: '1px solid #333',
-                          color: '#fff',
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1, minWidth: '100px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#9ca3af',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Proveedor
-                      </label>
-                      <input
-                        name="proveedor"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: '#000',
-                          border: '1px solid #333',
-                          color: '#fff',
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1, minWidth: '80px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#9ca3af',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Factor/Cj
-                      </label>
-                      <input
-                        name="factor"
-                        type="number"
-                        required
-                        defaultValue="12"
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: '#000',
-                          border: '1px solid #333',
-                          color: '#fff',
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1, minWidth: '80px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#9ca3af',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Costo Cj
-                      </label>
-                      <input
-                        name="costo"
-                        type="number"
-                        step="0.1"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: '#000',
-                          border: '1px solid #333',
-                          color: '#fff',
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1, minWidth: '80px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#00ffff',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Venta Ud
-                      </label>
-                      <input
-                        name="precio"
-                        type="number"
-                        step="0.1"
-                        required
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: 'rgba(0,255,255,0.1)',
-                          border: '1px solid rgba(0,255,255,0.3)',
-                          color: '#00ffff',
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1, minWidth: '80px' }}>
-                      <label
-                        style={{
-                          display: 'block',
-                          fontSize: '10px',
-                          color: '#ef4444',
-                          marginBottom: '5px',
-                        }}
-                      >
-                        Alerta Min
-                      </label>
-                      <input
-                        name="stockMin"
-                        type="number"
-                        required
-                        defaultValue="3"
-                        style={{
-                          width: '100%',
-                          padding: '10px',
-                          borderRadius: '8px',
-                          backgroundColor: 'rgba(239,68,68,0.1)',
-                          border: '1px solid rgba(239,68,68,0.3)',
-                          color: '#ef4444',
-                        }}
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      style={{
-                        padding: '10px 20px',
-                        borderRadius: '8px',
-                        backgroundColor: '#00ffff',
-                        color: '#000',
-                        fontWeight: 'bold',
-                        border: 'none',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      AÑADIR
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {activeTab === 'config' && (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-                    gap: '20px',
-                  }}
-                >
-                  {Object.entries(estructura).map(([t, cats]: any) => (
-                    <div
-                      key={t}
-                      style={{
-                        backgroundColor: '#150a25',
-                        padding: '24px',
-                        borderRadius: '24px',
-                        border: '1px solid rgba(255,255,255,0.05)',
-                      }}
-                    >
-                      <h4
-                        style={{
-                          color: '#ff00ff',
-                          margin: '0 0 15px 0',
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {t}
-                      </h4>
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexWrap: 'wrap',
-                          gap: '8px',
-                          marginBottom: '15px',
-                        }}
-                      >
-                        {cats.map((c: any) => (
-                          <span
-                            key={c}
-                            style={{
-                              backgroundColor: 'rgba(255,255,255,0.1)',
-                              padding: '5px 10px',
-                              borderRadius: '5px',
-                              fontSize: '12px',
-                            }}
-                          >
-                            {c}
-                          </span>
-                        ))}
-                      </div>
-                      <input
-                        placeholder="+ Nueva Categoría (Enter)"
-                        style={{
-                          width: '100%',
-                          padding: '12px',
-                          borderRadius: '10px',
-                          backgroundColor: '#000',
-                          border: '1px solid rgba(255,0,255,0.3)',
-                          color: '#fff',
-                          outline: 'none',
-                        }}
-                        onKeyDown={async (e: any) => {
-                          if (
-                            e.key === 'Enter' &&
-                            e.target.value.trim() !== ''
-                          ) {
-                            const newE = {
-                              ...estructura,
-                              [t]: [...estructura[t], e.target.value.trim()],
-                            };
-                            setEstructura(newE);
-                            await setDoc(
-                              doc(db, 'estructura_gastos', 'config_general'),
-                              newE
-                            );
-                            e.target.value = '';
-                          }
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            ))
           )}
+        </div>
+
+        <div className="border-t border-slate-800 pt-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <span className="text-slate-400 font-bold uppercase tracking-widest">Total:</span>
+            <span className="text-4xl font-black text-emerald-400">S/ {cartTotal.toFixed(2)}</span>
+          </div>
+          <button onClick={() => checkout(false)} disabled={cart.length === 0} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xl p-4 rounded-xl transition-colors disabled:opacity-50 shadow-lg shadow-emerald-900/50">
+            COBRAR TICKET
+          </button>
+          <button onClick={() => checkout(true)} disabled={cart.length === 0} className="w-full bg-orange-500/20 border border-orange-500 hover:bg-orange-500/30 text-orange-400 font-bold p-3 rounded-xl transition-colors disabled:opacity-50">
+            REGISTRAR COMO CORTESÍA
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- VISTA: GASTOS ---
+  const renderGastos = () => (
+    <div className="animate-in fade-in duration-500">
+      <h2 className="text-3xl font-black italic text-fuchsia-500 mb-8 tracking-widest uppercase">Registro de Gastos</h2>
+      
+      <div className="bg-[#13071E] p-8 rounded-3xl border border-fuchsia-900/30 mb-8 shadow-xl">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-white"><Plus className="text-fuchsia-400"/> Nueva Salida de Dinero</h3>
+        <form onSubmit={handleAddExpense} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Categoría</label>
+            <select className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newExpense.category} onChange={e => setNewExpense({...newExpense, category: e.target.value})}>
+              <option>Artistas</option><option>Seguridad</option><option>Marketing</option><option>Personal</option><option>Limpieza</option><option>Servicios</option><option>Otros</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Descripción / Concepto</label>
+            <input required type="text" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newExpense.description} onChange={e => setNewExpense({...newExpense, description: e.target.value})} placeholder="Ej. Pago Orquesta Tumbao" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Monto (S/)</label>
+            <input required type="number" step="0.1" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newExpense.amount || ''} onChange={e => setNewExpense({...newExpense, amount: e.target.value as any})} placeholder="0.00" />
+          </div>
+          <button type="submit" className="bg-fuchsia-600 hover:bg-fuchsia-500 p-3 rounded-xl font-black text-white transition-colors h-[50px] shadow-lg shadow-fuchsia-900/50 md:col-span-4">REGISTRAR GASTO</button>
+        </form>
+      </div>
+
+      <div className="bg-[#13071E] rounded-3xl border border-fuchsia-900/30 overflow-hidden shadow-xl">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-slate-900/50 text-fuchsia-400 text-xs uppercase tracking-widest border-b border-fuchsia-900/30">
+              <th className="p-5 font-black">Fecha</th><th className="p-5 font-black">Categoría</th><th className="p-5 font-black">Descripción</th><th className="p-5 font-black text-right">Monto Pagado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {expenses.map((exp) => (
+              <tr key={exp.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                <td className="p-5 text-slate-400 text-sm">{new Date(exp.date).toLocaleDateString()}</td>
+                <td className="p-5"><span className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-bold text-cyan-400 uppercase">{exp.category}</span></td>
+                <td className="p-5 font-bold text-white">{exp.description}</td>
+                <td className="p-5 text-right font-black text-red-400 text-lg">- S/ {exp.amount.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // --- VISTA: INVENTARIO ---
+  const renderInventario = () => (
+    <div className="animate-in fade-in duration-500">
+      <h2 className="text-3xl font-black italic text-fuchsia-500 mb-8 tracking-widest uppercase">Inventario y Stock</h2>
+      
+      <div className="bg-[#13071E] p-8 rounded-3xl border border-emerald-500/30 mb-8 shadow-xl">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-white"><Package className="text-emerald-400"/> Reabastecimiento (Ingreso de Cajas/Paquetes)</h3>
+        <form onSubmit={handleAddStock} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Seleccionar Producto</label>
+            <select required className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-emerald-500 outline-none" value={stockAdd.productId} onChange={e => setStockAdd({...stockAdd, productId: e.target.value})}>
+              <option value="">-- Elegir del Catálogo --</option>
+              {catalog.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type} x {p.unitsPerPackage})</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Cantidad (Empaques)</label>
+            <input required type="number" min="1" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-emerald-500 outline-none" value={stockAdd.packageQty || ''} onChange={e => setStockAdd({...stockAdd, packageQty: e.target.value as any})} placeholder="Ej. 5 Cajas" />
+          </div>
+          <button type="submit" className="bg-emerald-600 hover:bg-emerald-500 p-3 rounded-xl font-black text-white transition-colors h-[50px] shadow-lg shadow-emerald-900/50">SUMAR AL STOCK</button>
+        </form>
+      </div>
+
+      <div className="bg-[#13071E] rounded-3xl border border-fuchsia-900/30 overflow-hidden shadow-xl">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-slate-900/50 text-fuchsia-400 text-xs uppercase tracking-widest border-b border-fuchsia-900/30">
+              <th className="p-5 font-black">Producto</th><th className="p-5 font-black text-center">Formato</th><th className="p-5 font-black text-right">Stock (Unidades)</th><th className="p-5 font-black text-right">Equivalencia Aprox.</th><th className="p-5 font-black text-center">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {catalog.map((prod) => {
+              const stock = inventory.find(i => i.id === prod.id)?.stockUnits || 0;
+              const equivalent = (stock / prod.unitsPerPackage).toFixed(1);
+              let statusColor = stock > 20 ? 'text-emerald-400' : (stock > 0 ? 'text-orange-400' : 'text-red-500');
+              return (
+                <tr key={prod.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                  <td className="p-5 font-bold text-white text-lg">{prod.name}</td>
+                  <td className="p-5 text-center text-slate-400 text-sm">{prod.type} (x{prod.unitsPerPackage})</td>
+                  <td className={`p-5 text-right font-black text-2xl ${statusColor}`}>{stock}</td>
+                  <td className="p-5 text-right text-slate-500 font-bold">{equivalent} {prod.type}s</td>
+                  <td className="p-5 text-center">
+                    {stock === 0 ? <span className="px-3 py-1 bg-red-500/20 text-red-500 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-1 w-max mx-auto"><AlertCircle size={14}/> Agotado</span> : stock <= 20 ? <span className="px-3 py-1 bg-orange-500/20 text-orange-400 rounded-lg text-xs font-bold uppercase w-max mx-auto block">Bajo</span> : <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-bold uppercase w-max mx-auto block">Óptimo</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // --- VISTA: CONFIGURACIÓN (CATÁLOGO) REPARADA ---
+  const renderConfigurar = () => (
+    <div className="animate-in fade-in duration-500">
+      <h2 className="text-3xl font-black italic text-fuchsia-500 mb-8 tracking-widest uppercase">Catálogo Maestro</h2>
+      
+      <div className="bg-[#13071E] p-8 rounded-3xl border border-fuchsia-900/30 mb-8 shadow-xl">
+        <h3 className="text-xl font-bold mb-6 flex items-center gap-2 text-white"><Plus className="text-fuchsia-400"/> Registrar Producto para Venta</h3>
+        <form onSubmit={handleAddProduct} className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Nombre del Producto</label>
+            <input required type="text" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} placeholder="Ej. Cerveza Corona" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Empaque</label>
+            <select className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newProduct.type} onChange={e => setNewProduct({...newProduct, type: e.target.value})}>
+              <option>Caja</option><option>Paquete</option><option>Unidad</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">U. x Empaque</label>
+            <input required type="number" min="1" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newProduct.unitsPerPackage || ''} onChange={e => setNewProduct({...newProduct, unitsPerPackage: e.target.value as any})} placeholder="12" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold tracking-wider text-slate-400 mb-2 uppercase">Precio Venta (S/)</label>
+            <input required type="number" step="0.1" className="w-full bg-slate-900 p-3 rounded-xl text-white border border-slate-800 focus:border-fuchsia-500 outline-none" value={newProduct.price || ''} onChange={e => setNewProduct({...newProduct, price: e.target.value as any})} placeholder="0.00" />
+          </div>
+          <button type="submit" className="bg-fuchsia-600 hover:bg-fuchsia-500 p-3 rounded-xl font-black text-white transition-colors h-[50px] shadow-lg shadow-fuchsia-900/50">CREAR</button>
+        </form>
+      </div>
+
+      <div className="bg-[#13071E] rounded-3xl border border-fuchsia-900/30 overflow-hidden shadow-xl">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-slate-900/50 text-fuchsia-400 text-xs uppercase tracking-widest border-b border-fuchsia-900/30">
+              <th className="p-5 font-black">ID</th><th className="p-5 font-black">Producto</th><th className="p-5 font-black">Formato Compra</th><th className="p-5 font-black text-right">Precio Venta (U)</th><th className="p-5 font-black text-center">Acción</th>
+            </tr>
+          </thead>
+          <tbody>
+            {catalog.map((prod) => (
+              <tr key={prod.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                <td className="p-5 text-slate-500 text-sm font-bold">{prod.id}</td>
+                <td className="p-5 font-bold text-white text-lg">{prod.name}</td>
+                <td className="p-5 text-slate-400 text-sm">{prod.type} (Trae {prod.unitsPerPackage} unid.)</td>
+                <td className="p-5 text-right font-black text-emerald-400 text-xl">S/ {prod.price.toFixed(2)}</td>
+                <td className="p-5 text-center">
+                  <button onClick={() => handleDeleteProduct(prod.id)} className="p-3 text-red-500 hover:text-white hover:bg-red-500 rounded-xl transition-colors"><Trash2 size={20} /></button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  // ==========================================
+  // 5. RENDER ESTRUCTURA BASE (SIDEBAR + CONTENT)
+  // ==========================================
+  return (
+    <div className="min-h-screen bg-[#0B0410] text-white flex overflow-hidden">
+      <aside className="w-72 bg-[#0B0410] border-r border-fuchsia-900/20 p-6 flex flex-col justify-between hidden md:flex h-screen overflow-y-auto z-20">
+        <div>
+          <div className="mb-12 text-center mt-4">
+             <h1 className="font-black italic text-3xl tracking-widest text-white">EL ENCANTO</h1>
+             <p className={`text-xs font-black uppercase tracking-widest mt-2 py-1.5 rounded-lg border inline-block px-4 shadow-lg ${userRole === 'admin' ? 'bg-fuchsia-900/20 text-fuchsia-400 border-fuchsia-500/20 shadow-fuchsia-900/20' : 'bg-cyan-900/20 text-cyan-400 border-cyan-500/20 shadow-cyan-900/20'}`}>
+               MODO: {userRole}
+             </p>
+          </div>
+          
+          <nav className="space-y-3">
+            <button onClick={() => setActiveTab('panel')} className={`flex items-center gap-4 w-full p-4 rounded-2xl transition-all font-bold text-sm tracking-wider ${activeTab === 'panel' ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-900/50' : 'text-slate-400 hover:bg-[#13071E] hover:text-white'}`}>
+              <LayoutDashboard size={20} /> PANEL
+            </button>
+            
+            <button onClick={() => setActiveTab('barra')} className={`flex items-center gap-4 w-full p-4 rounded-2xl transition-all font-bold text-sm tracking-wider ${activeTab === 'barra' ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-900/50' : 'text-slate-400 hover:bg-[#13071E] hover:text-white'}`}>
+              <Beer size={20} /> CAJA / BARRA
+            </button>
+            
+            {userRole === 'admin' && (
+              <>
+                <button onClick={() => setActiveTab('gastos')} className={`flex items-center gap-4 w-full p-4 rounded-2xl transition-all font-bold text-sm tracking-wider ${activeTab === 'gastos' ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-900/50' : 'text-slate-400 hover:bg-[#13071E] hover:text-white'}`}>
+                  <Receipt size={20} /> GASTOS
+                </button>
+                <button onClick={() => setActiveTab('productos')} className={`flex items-center gap-4 w-full p-4 rounded-2xl transition-all font-bold text-sm tracking-wider ${activeTab === 'productos' ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-900/50' : 'text-slate-400 hover:bg-[#13071E] hover:text-white'}`}>
+                  <Package size={20} /> INVENTARIO
+                </button>
+                <button onClick={() => setActiveTab('configurar')} className={`flex items-center gap-4 w-full p-4 rounded-2xl transition-all font-bold text-sm tracking-wider mt-6 ${activeTab === 'configurar' ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-900/50' : 'text-fuchsia-400 hover:bg-fuchsia-900/20 border border-transparent hover:border-fuchsia-900/30'}`}>
+                  <Settings size={20} /> CATÁLOGO
+                </button>
+              </>
+            )}
+          </nav>
+        </div>
+        
+        <button onClick={() => {setUserRole(null); setActiveTab('panel');}} className="flex items-center justify-center gap-3 text-red-500 hover:text-white text-sm font-bold p-4 hover:bg-red-500 rounded-2xl transition-all mt-8 border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.1)]">
+          <LogOut size={20} /> SALIR
+        </button>
+      </aside>
+
+      <main className="flex-1 p-6 md:p-10 overflow-y-auto bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-fuchsia-900/10 via-[#0B0410] to-[#0B0410]">
+        {activeTab === 'panel' && renderPanel()}
+        {activeTab === 'barra' && renderBarra()}
+        {activeTab === 'gastos' && userRole === 'admin' && renderGastos()}
+        {activeTab === 'productos' && userRole === 'admin' && renderInventario()}
+        {activeTab === 'configurar' && userRole === 'admin' && renderConfigurar()}
       </main>
     </div>
   );
