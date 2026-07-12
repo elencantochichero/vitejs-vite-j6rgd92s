@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   LayoutDashboard, Settings, Receipt, Package, LogOut, ShieldCheck, 
   Plus, Trash2, Beer, ArrowLeft, ShoppingCart, TrendingUp, TrendingDown, 
