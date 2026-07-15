@@ -60,6 +60,10 @@ export default function App() {
   const [expenseForm, setExpenseForm] = useState({ id: null, category: 'Seguridad', type: 'Directo', description: '', amount: '' });
   const [quickStockAdd, setQuickStockAdd] = useState({ productId: '', packages: '' });
   
+  // NUEVOS ESTADOS PARA CIERRE DE STOCK Y CORTESÍAS
+  const [reconciliationForm, setReconciliationForm] = useState({ productId: '', finalStock: '' });
+  const [courtesyRecipient, setCourtesyRecipient] = useState('');
+
   // === ESTADOS DE FILTROS (DASHBOARD) ===
   const [filterProductId, setFilterProductId] = useState('');
 
@@ -120,7 +124,15 @@ export default function App() {
     if (cart.length === 0) return;
     const total = isCourtesy ? 0 : cart.reduce((acc, item) => acc + (item.price * item.qty), 0);
     
-    const newSale = { id: `V-${Date.now()}`, date: new Date().toISOString(), items: [...cart], total, isCourtesy };
+    // Modificado para guardar el destinatario de la cortesía
+    const newSale = { 
+      id: `V-${Date.now()}`, 
+      date: new Date().toISOString(), 
+      items: [...cart], 
+      total, 
+      isCourtesy,
+      recipient: isCourtesy ? (courtesyRecipient || 'Cortesía General') : null 
+    };
 
     setInventory(prev => prev.map(invItem => {
       const cartItem = cart.find(c => c.productId === invItem.id);
@@ -129,6 +141,7 @@ export default function App() {
 
     setSales(prev => [newSale, ...prev]);
     setCart([]);
+    setCourtesyRecipient(''); // Limpiamos el destinatario
     vibrate([100, 50, 100, 50, 200]); triggerFlash('success');
     triggerNotification(isCourtesy ? "CORTESÍA REGISTRADA" : "¡VENTA EXITOSA!", "success");
   };
@@ -174,6 +187,40 @@ export default function App() {
     triggerNotification(`Ingresaron ${units} unidades de ${product.name}`, "success");
   };
 
+  // NUEVO: Lógica de Cuadre/Cierre de Stock al final del día
+  const handleStockReconciliation = (e) => {
+    e.preventDefault();
+    const product = products.find(p => p.id === reconciliationForm.productId);
+    const finalCount = Number(reconciliationForm.finalStock);
+    
+    if (!product || reconciliationForm.finalStock === '' || finalCount < 0) return;
+
+    setInventory(prev => prev.map(i => {
+      if (i.id === reconciliationForm.productId) {
+        const diff = i.stockUnits - finalCount;
+        
+        // Si hay un faltante (diferencia positiva), lo registramos como una merma/ajuste
+        if (diff > 0) {
+          const phantomSale = {
+            id: `AJUSTE-${Date.now()}`,
+            date: new Date().toISOString(),
+            items: [{ productId: product.id, name: product.name, qty: diff, price: product.price }],
+            total: 0,
+            isCourtesy: true,
+            recipient: 'Ajuste de Cierre (Faltante no registrado)'
+          };
+          setSales(prevSales => [phantomSale, ...prevSales]);
+        }
+        return { ...i, stockUnits: finalCount };
+      }
+      return i;
+    }));
+
+    setReconciliationForm({ productId: '', finalStock: '' });
+    vibrate(100);
+    triggerNotification(`Stock de ${product.name} cuadrado a ${finalCount} unds.`, "info");
+  };
+
   // ==========================================
   // LÓGICA DE GASTOS (CRUD COMPLETO)
   // ==========================================
@@ -212,6 +259,14 @@ export default function App() {
   const totalIngresos = useMemo(() => sales.reduce((acc, s) => acc + s.total, 0), [sales]);
   const totalEgresos = useMemo(() => expenses.reduce((acc, e) => acc + e.amount, 0), [expenses]);
   const flujoNeto = totalIngresos - totalEgresos;
+
+  // NUEVO: Calcular valorización de las cortesías/mermas entregadas
+  const valorCortesias = useMemo(() => {
+    return sales.filter(s => s.isCourtesy).reduce((acc, s) => {
+      const valorTicket = s.items.reduce((sum, item) => sum + (item.price * item.qty), 0);
+      return acc + valorTicket;
+    }, 0);
+  }, [sales]);
 
   // Productos más vendidos
   const bestSellers = useMemo(() => {
@@ -315,21 +370,26 @@ export default function App() {
           <div className="space-y-6 animate-[fadeIn_0.4s_ease-out]">
             
             {/* Tarjetas Principales Dinámicas */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-gradient-to-br from-emerald-900/40 to-[#13131a] p-6 rounded-3xl border border-emerald-500/20 relative overflow-hidden group">
                 <div className="absolute -right-10 -top-10 w-32 h-32 bg-emerald-500/20 blur-3xl group-hover:bg-emerald-500/30 transition-all"></div>
                 <h3 className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-1">Ingresos Brutos</h3>
-                <p className="text-4xl font-black text-white drop-shadow-[0_0_10px_rgba(52,211,153,0.3)]">S/ {totalIngresos.toFixed(2)}</p>
+                <p className="text-3xl lg:text-4xl font-black text-white drop-shadow-[0_0_10px_rgba(52,211,153,0.3)]">S/ {totalIngresos.toFixed(2)}</p>
               </div>
               <div className="bg-gradient-to-br from-rose-900/40 to-[#13131a] p-6 rounded-3xl border border-rose-500/20 relative overflow-hidden group">
                 <div className="absolute -right-10 -top-10 w-32 h-32 bg-rose-500/20 blur-3xl group-hover:bg-rose-500/30 transition-all"></div>
                 <h3 className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-1">Egresos Totales</h3>
-                <p className="text-4xl font-black text-white drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">S/ {totalEgresos.toFixed(2)}</p>
+                <p className="text-3xl lg:text-4xl font-black text-white drop-shadow-[0_0_10px_rgba(244,63,94,0.3)]">S/ {totalEgresos.toFixed(2)}</p>
               </div>
               <div className="bg-gradient-to-br from-indigo-900/40 to-[#13131a] p-6 rounded-3xl border border-indigo-500/20 relative overflow-hidden group">
                 <div className="absolute -right-10 -top-10 w-32 h-32 bg-indigo-500/20 blur-3xl group-hover:bg-indigo-500/30 transition-all"></div>
                 <h3 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1">Cuadre / Flujo Neto</h3>
-                <p className={`text-5xl font-black drop-shadow-[0_0_15px_rgba(255,255,255,0.4)] ${flujoNeto >= 0 ? 'text-white' : 'text-rose-500'}`}>S/ {flujoNeto.toFixed(2)}</p>
+                <p className={`text-3xl lg:text-4xl font-black drop-shadow-[0_0_15px_rgba(255,255,255,0.4)] ${flujoNeto >= 0 ? 'text-white' : 'text-rose-500'}`}>S/ {flujoNeto.toFixed(2)}</p>
+              </div>
+              <div className="bg-gradient-to-br from-violet-900/40 to-[#13131a] p-6 rounded-3xl border border-violet-500/20 relative overflow-hidden group">
+                <div className="absolute -right-10 -top-10 w-32 h-32 bg-violet-500/20 blur-3xl group-hover:bg-violet-500/30 transition-all"></div>
+                <h3 className="text-[10px] font-black text-violet-400 uppercase tracking-widest mb-1">Cortesías y Ajustes</h3>
+                <p className="text-3xl lg:text-4xl font-black text-white drop-shadow-[0_0_10px_rgba(139,92,246,0.3)]">S/ {valorCortesias.toFixed(2)}</p>
               </div>
             </div>
 
@@ -520,10 +580,24 @@ export default function App() {
                 )}
               </div>
               <div className="p-5 bg-[#050508] border-t border-white/10 z-10 space-y-4">
-                <div className="flex justify-between items-end">
+                <div className="flex justify-between items-end mb-2">
                   <span className="text-xs text-slate-500 font-bold uppercase tracking-widest">A Cobrar</span>
                   <span className="text-4xl font-black text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]">S/ {cart.reduce((a, b) => a + (b.price * b.qty), 0).toFixed(2)}</span>
                 </div>
+
+                {/* Input Dinámico de Cortesía */}
+                {cart.length > 0 && (
+                  <div className="animate-[fadeIn_0.2s_ease-out]">
+                    <input 
+                      type="text" 
+                      placeholder="Para cortesía: ¿Quién recibe? (Ej: DJ, Animador)..." 
+                      value={courtesyRecipient}
+                      onChange={(e) => setCourtesyRecipient(e.target.value)}
+                      className="w-full bg-[#151520] border border-white/5 rounded-xl px-4 py-2.5 text-xs font-bold text-white focus:border-violet-500 outline-none transition-all placeholder:text-slate-600"
+                    />
+                  </div>
+                )}
+
                 <div className="grid grid-cols-12 gap-3">
                   <button disabled={cart.length === 0} onClick={() => processCheckout(true)} className="col-span-4 bg-[#151520] text-slate-400 border border-white/10 hover:text-white hover:border-violet-500 hover:bg-violet-900/30 rounded-2xl py-4 font-black text-xs uppercase tracking-widest disabled:opacity-30 flex flex-col items-center justify-center gap-1 active:scale-95">
                     <span className="text-xl">🎁</span>Merma
@@ -540,25 +614,57 @@ export default function App() {
         {/* 3. INVENTARIO */}
         {activeTab === 'inventory' && (
           <div className="space-y-6 animate-[fadeIn_0.3s_ease-out]">
-            <div className="bg-[#101016] rounded-3xl border border-white/5 p-6 shadow-xl">
-              <h2 className="font-black text-xl text-white flex items-center gap-2 mb-6"><span>⚡</span> ENTRADA RÁPIDA DE STOCK</h2>
-              <form onSubmit={handleAddStock} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                <div className="md:col-span-5">
-                  <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Producto</label>
-                  <select value={quickStockAdd.productId} onChange={(e) => setQuickStockAdd({ ...quickStockAdd, productId: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-indigo-500 outline-none text-sm font-bold text-white">
-                    <option value="">-- SELECCIONAR --</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-                <div className="md:col-span-3">
-                  <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Cantidad (Cajas/Paquetes)</label>
-                  <input type="number" min="1" placeholder="0" value={quickStockAdd.packages} onChange={(e) => setQuickStockAdd({ ...quickStockAdd, packages: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-indigo-500 outline-none text-lg font-black text-white text-center" />
-                </div>
-                <div className="md:col-span-4">
-                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95">INYECTAR AL STOCK</button>
-                </div>
-              </form>
+            
+            {/* GRID 2 COLUMNAS: INGRESOS Y CIERRE */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* ENTRADA RÁPIDA DE STOCK */}
+              <div className="bg-[#101016] rounded-3xl border border-white/5 p-6 shadow-xl relative overflow-hidden">
+                <div className="absolute -right-20 -top-20 w-64 h-64 bg-indigo-500/10 blur-3xl rounded-full pointer-events-none"></div>
+                <h2 className="font-black text-lg text-white flex items-center gap-2 mb-6 relative z-10"><span>⚡</span> ENTRADA (COMPRAS)</h2>
+                <form onSubmit={handleAddStock} className="space-y-4 relative z-10">
+                  <div>
+                    <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Producto</label>
+                    <select value={quickStockAdd.productId} onChange={(e) => setQuickStockAdd({ ...quickStockAdd, productId: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-indigo-500 outline-none text-sm font-bold text-white appearance-none">
+                      <option value="">-- SELECCIONAR --</option>
+                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-4 items-end">
+                    <div className="flex-1">
+                      <label className="block text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Cant. (Cajas)</label>
+                      <input type="number" min="1" placeholder="0" value={quickStockAdd.packages} onChange={(e) => setQuickStockAdd({ ...quickStockAdd, packages: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-indigo-500 outline-none text-lg font-black text-white text-center" />
+                    </div>
+                    <button type="submit" className="flex-[2] bg-indigo-600 hover:bg-indigo-500 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95">INGRESAR LOTE</button>
+                  </div>
+                </form>
+              </div>
+
+              {/* NUEVO: CIERRE / CUADRE DE STOCK FÍSICO */}
+              <div className="bg-[#101016] rounded-3xl border border-white/5 p-6 shadow-xl relative overflow-hidden">
+                <div className="absolute -right-20 -top-20 w-64 h-64 bg-amber-500/10 blur-3xl rounded-full pointer-events-none"></div>
+                <h2 className="font-black text-lg text-white flex items-center gap-2 mb-6 relative z-10"><span>⚖️</span> CIERRE DE DÍA (CUADRE)</h2>
+                <form onSubmit={handleStockReconciliation} className="space-y-4 relative z-10">
+                  <div>
+                    <label className="block text-[10px] font-black text-amber-400 uppercase tracking-widest mb-2">Producto a Auditar</label>
+                    <select value={reconciliationForm.productId} onChange={(e) => setReconciliationForm({ ...reconciliationForm, productId: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-amber-500 outline-none text-sm font-bold text-white appearance-none">
+                      <option value="">-- SELECCIONAR --</option>
+                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex gap-4 items-end">
+                    <div className="flex-1">
+                      <label className="block text-[10px] font-black text-amber-400 uppercase tracking-widest mb-2">Stock Final (Botellas)</label>
+                      <input type="number" min="0" placeholder="0" value={reconciliationForm.finalStock} onChange={(e) => setReconciliationForm({ ...reconciliationForm, finalStock: e.target.value })} className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:border-amber-500 outline-none text-lg font-black text-white text-center" />
+                    </div>
+                    <button type="submit" className="flex-[2] bg-amber-600 hover:bg-amber-500 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95">AJUSTAR FÍSICO</button>
+                  </div>
+                </form>
+                <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-3 relative z-10">* Faltantes detectados se restan y van a "Ajustes/Cortesías".</p>
+              </div>
+
             </div>
+
             <div className="bg-[#101016] rounded-3xl border border-white/5 overflow-hidden shadow-xl">
               <div className="px-6 py-5 bg-black/40 border-b border-white/5">
                 <h3 className="font-black text-lg text-white tracking-widest">STOCK FÍSICO</h3>
